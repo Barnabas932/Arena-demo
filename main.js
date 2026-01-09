@@ -20,6 +20,12 @@ const CONFIG = {
   enemyHp: 2,
   playerMaxHp: 10,
   hitInvulnMs: 450,
+
+  // Pickups
+  pickupSpawnMs: 4000,   // 4 mp-enként új
+  pickupLifeMs: 5000,    // 5 mp után eltűnik
+  pickupMax: 18,
+  pickupBigChance: 0.18, // ~18% lila
 };
 
 class GameScene extends Phaser.Scene {
@@ -30,10 +36,8 @@ class GameScene extends Phaser.Scene {
   preload() {}
 
   create() {
-    // World bounds
     this.physics.world.setBounds(0, 0, W, H);
 
-    // Background
     this.add.rectangle(W/2, H/2, W, H, 0x101826).setDepth(-10);
     for (let i = 0; i < 60; i++) {
       const x = Phaser.Math.Between(0, W);
@@ -42,7 +46,6 @@ class GameScene extends Phaser.Scene {
       this.add.circle(x, y, r, 0x1b2a3f).setAlpha(0.9).setDepth(-9);
     }
 
-    // Create textures (simple shapes) at runtime
     this._makeTextures();
 
     // Player
@@ -72,15 +75,22 @@ class GameScene extends Phaser.Scene {
 
     this.pointer = this.input.activePointer;
 
-    // Bullets group
+    // Bullets
     this.bullets = this.physics.add.group({
       classType: Phaser.Physics.Arcade.Image,
       maxSize: 200,
       runChildUpdate: false,
     });
 
-    // Enemies group
+    // Enemies
     this.enemies = this.physics.add.group({
+      classType: Phaser.Physics.Arcade.Image,
+      maxSize: 200,
+      runChildUpdate: false,
+    });
+
+    // Pickups
+    this.pickups = this.physics.add.group({
       classType: Phaser.Physics.Arcade.Image,
       maxSize: 200,
       runChildUpdate: false,
@@ -99,6 +109,13 @@ class GameScene extends Phaser.Scene {
       callback: () => this._spawnEnemy(),
     });
 
+    // Spawn pickups (4s)
+    this.pickupTimer = this.time.addEvent({
+      delay: CONFIG.pickupSpawnMs,
+      loop: true,
+      callback: () => this._spawnPickup(),
+    });
+
     // Colliders/overlaps
     this.physics.add.overlap(this.bullets, this.enemies, (b, e) => {
       this._onBulletHitEnemy(b, e);
@@ -108,6 +125,10 @@ class GameScene extends Phaser.Scene {
       this._onPlayerTouchEnemy(p, e);
     });
 
+    this.physics.add.overlap(this.player, this.pickups, (p, it) => {
+      this._onPlayerPickup(it);
+    });
+
     // UI
     this.uiText = this.add.text(16, 12, "", {
       fontFamily: "system-ui, -apple-system, Segoe UI, Roboto, Arial",
@@ -115,19 +136,22 @@ class GameScene extends Phaser.Scene {
       color: "#d9e3f0",
     });
 
-    this.helpText = this.add.text(16, H - 24, "WASD/Arrows: move | Shift: dash | Click/Space: shoot", {
-      fontFamily: "system-ui, -apple-system, Segoe UI, Roboto, Arial",
-      fontSize: "14px",
-      color: "#8fb1d8",
-    }).setAlpha(0.85);
+    this.helpText = this.add.text(
+      16,
+      H - 24,
+      "WASD/Arrows: move | Shift: dash | Click/Space: shoot | Pickups: collect points",
+      {
+        fontFamily: "system-ui, -apple-system, Segoe UI, Roboto, Arial",
+        fontSize: "14px",
+        color: "#8fb1d8",
+      }
+    ).setAlpha(0.85);
 
     // Shooting: click
     this.input.on("pointerdown", () => this._tryShoot());
 
-    // Initial UI update
     this._updateUI();
 
-    // Game over flag
     this.gameOver = false;
   }
 
@@ -141,7 +165,10 @@ class GameScene extends Phaser.Scene {
     this._enemyAI();
     this._cleanupBullets(time);
 
-    // Space to shoot
+    // Pickups: float + auto-despawn after 5s
+    this._pickupFloat(time);
+    this._cleanupPickups(time);
+
     if (Phaser.Input.Keyboard.JustDown(this.keys.shoot)) {
       this._tryShoot();
     }
@@ -150,7 +177,7 @@ class GameScene extends Phaser.Scene {
   }
 
   _makeTextures() {
-    // player (cyan circle)
+    // player
     const g1 = this.make.graphics({ x: 0, y: 0, add: false });
     g1.fillStyle(0x3de0ff, 1);
     g1.fillCircle(16, 16, 12);
@@ -159,7 +186,7 @@ class GameScene extends Phaser.Scene {
     g1.generateTexture("player", 32, 32);
     g1.destroy();
 
-    // enemy (red circle)
+    // enemy
     const g2 = this.make.graphics({ x: 0, y: 0, add: false });
     g2.fillStyle(0xff4b4b, 1);
     g2.fillCircle(16, 16, 12);
@@ -168,16 +195,33 @@ class GameScene extends Phaser.Scene {
     g2.generateTexture("enemy", 32, 32);
     g2.destroy();
 
-    // bullet (yellow)
+    // bullet
     const g3 = this.make.graphics({ x: 0, y: 0, add: false });
     g3.fillStyle(0xffd84d, 1);
     g3.fillRect(0, 0, 10, 4);
     g3.generateTexture("bullet", 10, 4);
     g3.destroy();
+
+    // pickup small (blue)
+    const g4 = this.make.graphics({ x: 0, y: 0, add: false });
+    g4.fillStyle(0x4da3ff, 1);
+    g4.fillCircle(10, 10, 7);
+    g4.lineStyle(2, 0x0b0f14, 0.75);
+    g4.strokeCircle(10, 10, 7);
+    g4.generateTexture("pickup_small", 20, 20);
+    g4.destroy();
+
+    // pickup big (purple)
+    const g5 = this.make.graphics({ x: 0, y: 0, add: false });
+    g5.fillStyle(0xb66bff, 1);
+    g5.fillCircle(12, 12, 9);
+    g5.lineStyle(2, 0x0b0f14, 0.75);
+    g5.strokeCircle(12, 12, 9);
+    g5.generateTexture("pickup_big", 24, 24);
+    g5.destroy();
   }
 
   _movePlayer(time) {
-    // Input vector
     let vx = 0, vy = 0;
     const left = this.keys.left.isDown || this.keys.left2.isDown;
     const right = this.keys.right.isDown || this.keys.right2.isDown;
@@ -201,7 +245,6 @@ class GameScene extends Phaser.Scene {
       this.player.setVelocity(vx * CONFIG.dashSpeed, vy * CONFIG.dashSpeed);
     }
 
-    // If dashing, keep velocity until dash ends
     if (time < this.dashUntil) {
       this.player.setTint(0xb7fbff);
       return;
@@ -209,14 +252,13 @@ class GameScene extends Phaser.Scene {
       this.player.clearTint();
     }
 
-    // Normal movement (acceleration-like feel using velocity + drag)
     const targetVx = vx * CONFIG.playerSpeed;
     const targetVy = vy * CONFIG.playerSpeed;
 
-    // Blend current velocity toward target (smooth)
     const blend = 0.20;
     const cvx = this.player.body.velocity.x;
     const cvy = this.player.body.velocity.y;
+
     this.player.setVelocity(
       Phaser.Math.Linear(cvx, targetVx, blend),
       Phaser.Math.Linear(cvy, targetVy, blend)
@@ -227,7 +269,6 @@ class GameScene extends Phaser.Scene {
     if (this.gameOver) return;
 
     const now = this.time.now;
-    // Simple fire-rate limit (~10 shots/s)
     if (now - this.lastShotAt < 95) return;
     this.lastShotAt = now;
 
@@ -235,7 +276,6 @@ class GameScene extends Phaser.Scene {
     const mx = this.pointer.worldX ?? this.pointer.x;
     const my = this.pointer.worldY ?? this.pointer.y;
 
-    // Direction from player to mouse (fallback: forward)
     let dx = mx - p.x;
     let dy = my - p.y;
     const dlen = Math.hypot(dx, dy) || 1;
@@ -250,7 +290,6 @@ class GameScene extends Phaser.Scene {
     b.setVelocity(dx * CONFIG.bulletSpeed, dy * CONFIG.bulletSpeed);
     b._bornAt = now;
 
-    // Small muzzle offset
     b.x += dx * 18;
     b.y += dy * 18;
   }
@@ -258,13 +297,8 @@ class GameScene extends Phaser.Scene {
   _cleanupBullets(time) {
     this.bullets.children.each((b) => {
       if (!b.active) return;
-      if (time - (b._bornAt || 0) > CONFIG.bulletLifeMs) {
-        this._killBullet(b);
-      }
-      // Out of bounds
-      if (b.x < -20 || b.x > W + 20 || b.y < -20 || b.y > H + 20) {
-        this._killBullet(b);
-      }
+      if (time - (b._bornAt || 0) > CONFIG.bulletLifeMs) this._killBullet(b);
+      if (b.x < -20 || b.x > W + 20 || b.y < -20 || b.y > H + 20) this._killBullet(b);
     });
   }
 
@@ -278,7 +312,6 @@ class GameScene extends Phaser.Scene {
   _spawnEnemy() {
     if (this.gameOver) return;
 
-    // Spawn at edges
     const side = Phaser.Math.Between(0, 3);
     let x, y;
     if (side === 0) { x = -10; y = Phaser.Math.Between(0, H); }
@@ -293,8 +326,6 @@ class GameScene extends Phaser.Scene {
     e.body.enable = true;
     e.body.setCircle(12, 4, 4);
     e._hp = CONFIG.enemyHp;
-
-    // Slight random speed variance
     e._spd = CONFIG.enemySpeed * Phaser.Math.FloatBetween(0.9, 1.2);
   }
 
@@ -307,9 +338,7 @@ class GameScene extends Phaser.Scene {
       const dx = px - e.x;
       const dy = py - e.y;
       const len = Math.hypot(dx, dy) || 1;
-      const ux = dx / len;
-      const uy = dy / len;
-      e.setVelocity(ux * e._spd, uy * e._spd);
+      e.setVelocity((dx / len) * e._spd, (dy / len) * e._spd);
     });
   }
 
@@ -320,15 +349,14 @@ class GameScene extends Phaser.Scene {
 
     e._hp = (e._hp ?? CONFIG.enemyHp) - 1;
 
-    // small knockback
     const dx = e.x - this.player.x;
     const dy = e.y - this.player.y;
     const len = Math.hypot(dx, dy) || 1;
-    e.setVelocity((dx/len) * 240, (dy/len) * 240);
+    e.setVelocity((dx / len) * 240, (dy / len) * 240);
 
     if (e._hp <= 0) {
       this._killEnemy(e);
-      this.score += 10;
+      this.score += 10; // ha csak pickupból kérsz score-t, ezt töröld
     } else {
       e.setTint(0xffb3b3);
       this.time.delayedCall(70, () => e.clearTint());
@@ -351,27 +379,99 @@ class GameScene extends Phaser.Scene {
     this.playerInvulnUntil = now + CONFIG.hitInvulnMs;
     this.playerHp -= 1;
 
-    // pushback
     const dx = p.x - e.x;
     const dy = p.y - e.y;
     const len = Math.hypot(dx, dy) || 1;
-    p.setVelocity((dx/len) * 320, (dy/len) * 320);
+    p.setVelocity((dx / len) * 320, (dy / len) * 320);
 
-    // flash player
     p.setTint(0xffffff);
     this.time.delayedCall(90, () => p.clearTint());
 
-    if (this.playerHp <= 0) {
-      this._gameOver();
-    }
+    if (this.playerHp <= 0) this._gameOver();
   }
 
+  // ---------- PICKUPS ----------
+  _spawnPickup() {
+    if (this.gameOver) return;
+
+    let activeCount = 0;
+    this.pickups.children.each((it) => { if (it.active) activeCount++; });
+    if (activeCount >= CONFIG.pickupMax) return;
+
+    let x, y;
+    for (let tries = 0; tries < 10; tries++) {
+      x = Phaser.Math.Between(30, W - 30);
+      y = Phaser.Math.Between(30, H - 30);
+      const d = Phaser.Math.Distance.Between(x, y, this.player.x, this.player.y);
+      if (d > 90) break;
+    }
+
+    const isBig = Math.random() < CONFIG.pickupBigChance;
+    const key = isBig ? "pickup_big" : "pickup_small";
+
+    const it = this.pickups.get(x, y, key);
+    if (!it) return;
+
+    it.setActive(true).setVisible(true);
+    it.body.enable = true;
+    it.setImmovable(true);
+    it.setVelocity(0, 0);
+
+    it._value = isBig ? 5 : 1;
+    it._bornAt = this.time.now;
+    it._expiresAt = it._bornAt + CONFIG.pickupLifeMs;
+    it._baseY = y;
+
+    // reset scale if reused from pool
+    it.setScale(1);
+    it.clearTint();
+  }
+
+  _cleanupPickups(time) {
+    this.pickups.children.each((it) => {
+      if (!it.active) return;
+      if ((it._expiresAt || 0) <= time) {
+        this._killPickup(it);
+      }
+    });
+  }
+
+  _pickupFloat(time) {
+    this.pickups.children.each((it) => {
+      if (!it.active) return;
+      const t = (time - (it._bornAt || time)) / 1000;
+      it.y = (it._baseY || it.y) + Math.sin(t * 3.2) * 2.5;
+    });
+  }
+
+  _onPlayerPickup(it) {
+    if (!it.active) return;
+
+    this.score += (it._value || 1);
+
+    it.setScale(1.18);
+    this.time.delayedCall(40, () => {
+      if (it.active) this._killPickup(it);
+    });
+  }
+
+  _killPickup(it) {
+    it.setActive(false).setVisible(false);
+    it.body.stop();
+    it.body.enable = false;
+    it.setScale(1);
+    this.pickups.killAndHide(it);
+  }
+
+  // ---------- GAME OVER ----------
   _gameOver() {
     this.gameOver = true;
-    this.spawnTimer.paused = true;
+    if (this.spawnTimer) this.spawnTimer.paused = true;
+    if (this.pickupTimer) this.pickupTimer.paused = true;
 
     this.enemies.children.each((e) => { if (e.active) this._killEnemy(e); });
     this.bullets.children.each((b) => { if (b.active) this._killBullet(b); });
+    this.pickups.children.each((it) => { if (it.active) this._killPickup(it); });
 
     const panel = this.add.rectangle(W/2, H/2, 520, 220, 0x0b0f14, 0.88);
     panel.setStrokeStyle(2, 0x2c3e57, 0.9);
@@ -399,7 +499,9 @@ class GameScene extends Phaser.Scene {
     const now = this.time.now;
 
     const dashReady = (now - this.lastDashAt) >= CONFIG.dashCooldownMs;
-    const dashTxt = dashReady ? "READY" : `${Math.ceil((CONFIG.dashCooldownMs - (now - this.lastDashAt)))}ms`;
+    const dashTxt = dashReady
+      ? "READY"
+      : `${Math.ceil((CONFIG.dashCooldownMs - (now - this.lastDashAt)))}ms`;
 
     const invuln = now < this.playerInvulnUntil ? " (inv)" : "";
     this.uiText.setText(
